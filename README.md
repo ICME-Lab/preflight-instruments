@@ -1,5 +1,9 @@
 # injection-probe
 
+Made with ❤️ by [ICME Labs](https://blog.icme.io/).
+
+<img width="983" height="394" alt="icme_labs" src="https://github.com/user-attachments/assets/ffc334ed-c301-4ce6-8ca3-a565328904fe" />
+
 A minimal, honest reference implementation of an **activation probe** for
 detecting prompt-injection *compliance* in an open-weights LLM (Qwen by default).
 
@@ -143,6 +147,35 @@ It reports four things:
 All numbers are only as good as the data — a ~140-example set gives wide error
 bars. Treat this as the framework for honest measurement, and grow the dataset
 to tighten it.
+
+## Zero-knowledge proofs (verifiable guardrail)
+
+The `zkp/` module proves — with a zero-knowledge proof — that the probe actually
+ran on a given input and produced its score, using
+[JOLT Atlas](https://github.com/ICME-Lab/jolt-atlas) (a zkML framework). This
+turns "trust me, the guardrail ran" into a receipt anyone can verify, without
+trusting the party that ran it.
+
+**What the proof establishes:** execution integrity of the classifier step —
+this probe, this input, this score, untampered. It does **not** prove the input
+is a genuine model activation, nor that the verdict is semantically correct. It
+is process integrity, not prevention.
+
+Reference numbers (single CPU core, 1536-feature probe): **prove ~66 ms, verify
+~10 ms**, versus ~0.009 ms plain inference.
+
+Full reproducible walkthrough (clone → verified proof → benchmark) is in
+**[`zkp/README.md`](zkp/README.md)**. Quick version:
+
+```bash
+pip install skl2onnx onnx onnxruntime           # ONNX export deps
+python -m zkp.export_onnx_coreops --check        # probe -> ONNX (core ops only)
+git clone https://github.com/ICME-Lab/jolt-atlas.git
+mkdir -p jolt-atlas/atlas-onnx-tracer/models/probe
+cp zkp/artifacts/probe.onnx jolt-atlas/atlas-onnx-tracer/models/probe/network.onnx
+cp zkp/probe_example.rs jolt-atlas/jolt-atlas-core/examples/probe.rs
+cd jolt-atlas && cargo run --release --package jolt-atlas-core --example probe -- --trace-terminal
+```
 
 ## Manual test battery
 
