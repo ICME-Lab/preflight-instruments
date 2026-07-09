@@ -1,0 +1,12 @@
+# Core probe pipeline (runs the model-free test):
+numpy
+scikit-learn
+joblib
+pytest
+
+# Needed only for real activation extraction / detection with Qwen:
+torch
+transformers
+
+# Needed for the deepset/prompt-injections data source (second real benchmark):
+datasets

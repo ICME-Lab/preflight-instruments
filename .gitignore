@@ -1,0 +1,69 @@
+# ─── Python ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ─── Models, activations, artifacts (regenerable, and can be large) ───
+# Trained probe + metrics — regenerate with `python -m src.probe`
+artifacts/*.joblib
+artifacts/*.json
+# Extracted activations — regenerate with `python -m src.extract`
+data/activations.npz
+# Exported ONNX + sample inputs — regenerate with `python -m zkp.export_onnx_coreops`
+zkp/artifacts/*.onnx
+zkp/artifacts/*.npy
+# Benchmark outputs
+bench_results.json
+*.bench.json
+
+# ─── Cached third-party datasets (re-downloaded on first run) ─────────
+# InjecAgent files fetched by data/injecagent.py
+data/injecagent/
+# HuggingFace / datasets cache, if it ever lands in-tree
+.cache/
+hf_cache/
+
+# ─── Vendored / cloned JOLT Atlas repo (clone separately, don't commit) ─
+# The zkp benchmark expects jolt-atlas checked out alongside; it is its own
+# repo with its own license and a huge Rust target/ tree. Do NOT vendor it.
+jolt-atlas/
+/jolt-atlas
+
+# ─── Rust build output (in case anything Rust lands here) ─────────────
+target/
+Cargo.lock
+
+# ─── Secrets / local config — never commit ───────────────────────────
+.env
+.env.*
+*.pem
+*.key
+secrets.*
+**/credentials*.json
+# ICME guardrail keys are read from the environment (ICME_API_KEY,
+# ICME_POLICY_ID); never hard-code them into a committed file.
+
+# ─── OS / editor cruft ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+path/to/venv/
+**/site-packages/
