@@ -65,5 +65,22 @@ Thumbs.db
 *~
 .idea/
 .vscode/
-path/to/venv/
-**/site-packages/
+
+# ─── Suite artifacts (added with detector suite + server) ─────────────
+# SAE weights — regenerate with `python -m src.train_sae`
+artifacts/*.npz
+# Any benchmark metadata dumps
+benchmark_meta.json
+artifacts/*.npy
+
+# ─── HuggingFace model cache (PromptGuard, Qwen download here) ────────
+# These are large; they live in ~/.cache/huggingface by default, but guard
+# against a local ./ cache too.
+.huggingface/
+huggingface/
+models--*/
+
+# ─── Server / runtime ────────────────────────────────────────────────
+*.pid
+*.log
+nohup.out

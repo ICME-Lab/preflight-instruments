@@ -34,7 +34,101 @@ zkp/artifacts/probe.onnx   (standardize → linear → sigmoid, opset 17)
 JOLT Atlas: setup → prove → verify   (Rust, on your machine)
 ```
 
-## Step 1 — export the probe to ONNX (tested, runs here)
+## Full walkthrough: clone to verified proof
+
+This reproduces the prove/verify benchmark from scratch. Assumes you've already
+trained the probe (`python -m src.probe`, which writes `artifacts/probe.joblib`).
+
+### 0. Prerequisites
+
+- Python env with this repo's deps plus the ONNX tooling:
+  ```bash
+  pip install -r requirements.txt
+  pip install skl2onnx onnx onnxruntime
+  ```
+- Rust toolchain (stable) for JOLT Atlas: https://rustup.rs
+
+### 1. Export the probe to a JOLT-Atlas-compatible ONNX graph
+
+```bash
+python -m zkp.export_onnx_coreops --check
+```
+
+Use `export_onnx_coreops`, NOT `export_onnx`. Details and the reasons for the
+specific graph shape are in the "Graph shape" section below — they matter if you
+ever change the probe. `--check` confirms the ONNX matches scikit-learn
+(max abs diff ~1e-7) and writes `zkp/artifacts/probe.onnx`.
+
+### 2. Get JOLT Atlas and confirm it builds
+
+Clone it next to or inside this repo (these instructions assume inside, at
+`./jolt-atlas`; adjust paths if you put it elsewhere):
+
+```bash
+git clone https://github.com/ICME-Lab/jolt-atlas.git
+cd jolt-atlas
+# Sanity-check the toolchain on one of their own examples first (first build
+# pulls many crates and takes several minutes):
+cargo run --release --package jolt-atlas-core --example nanoGPT -- --trace-terminal
+cd ..
+```
+
+You want `Proof verified successfully!` from nanoGPT before continuing. If that
+fails, it's a Rust/toolchain issue, not a probe issue.
+
+### 3. Wire the probe into JOLT Atlas
+
+```bash
+# model directory + the exported graph (renamed to their convention):
+mkdir -p jolt-atlas/atlas-onnx-tracer/models/probe
+cp zkp/artifacts/probe.onnx jolt-atlas/atlas-onnx-tracer/models/probe/network.onnx
+
+# the example that loads it and runs prove -> verify:
+cp zkp/probe_example.rs jolt-atlas/jolt-atlas-core/examples/probe.rs
+```
+
+**IMPORTANT — re-copy after every re-export.** The tracer reads the *copied*
+`network.onnx`, not `zkp/artifacts/probe.onnx`. If you re-run the exporter you
+MUST re-copy, or you'll prove a stale graph. Verify they match:
+
+```bash
+md5sum zkp/artifacts/probe.onnx jolt-atlas/atlas-onnx-tracer/models/probe/network.onnx
+# the two hashes must be identical
+```
+
+### 4. Run the proof
+
+```bash
+cd jolt-atlas
+cargo run --release --package jolt-atlas-core --example probe -- --trace-terminal
+cd ..
+```
+
+Expected: a computation-graph summary whose `Einsum` node reads `mk,nk->n`, then
+`Proof generation took ...`, `Proof verification took ...`, and
+`Proof verified successfully!`. Reference numbers on a single CPU core: prove
+~66 ms, verify ~10 ms for the 1536-feature probe.
+
+### 5. Full with/without benchmark
+
+```bash
+python -m zkp.benchmark --runs 200 --jolt-atlas jolt-atlas --jolt-runs 5 --json bench_results.json
+```
+
+Prints plain-inference latency (WITHOUT zk) next to prove+verify (WITH zk), plus
+the overhead factor, and writes `bench_results.json`.
+
+> **Reading the benchmark honestly:** the harness's `end-to-end` wall time
+> includes process spawn + model load + setup, so the raw "overhead factor" is
+> inflated. The steady-state cryptographic cost is the ~66 ms prove + ~10 ms
+> verify from step 4's trace. Quote those for a fair comparison; the end-to-end
+> number is what you'd pay per cold `cargo run`, not per proof in a warm server.
+
+---
+
+## Reference: individual steps
+
+### Step 1 — export the probe to ONNX (tested, runs here)
 
 ```bash
 python -m zkp.export_onnx_coreops --check

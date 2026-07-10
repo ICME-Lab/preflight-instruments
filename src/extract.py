@@ -71,9 +71,55 @@ def extract(texts, labels, groups=None):
     if groups is None:
         groups = ["unknown"] * len(labels)
     g = np.asarray(groups, dtype=object)
-    np.savez_compressed(ACTIVATIONS_PATH, X=X, y=y, groups=g)
+    # Save the source texts too, so text-based detectors (PromptGuard) score the
+    # EXACT strings that produced each activation — no index-alignment guessing.
+    txt = np.asarray(list(texts), dtype=object)
+    np.savez_compressed(ACTIVATIONS_PATH, X=X, y=y, groups=g, texts=txt)
     print(f"Saved {X.shape} activations -> {ACTIVATIONS_PATH}")
     return X, y
+
+
+
+# ---- runtime single-text extraction (model cached across calls) ----
+_RT = {"tok": None, "model": None, "device": None}
+
+
+def _ensure_model():
+    """Load the model once and cache it for repeated single-text extraction
+    (used by the runtime scanner / server, not the batch pipeline)."""
+    if _RT["model"] is not None:
+        return
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    tok = AutoTokenizer.from_pretrained(MODEL_NAME)
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_NAME,
+        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+        output_hidden_states=True,
+    ).to(device)
+    model.eval()
+    _RT.update(tok=tok, model=model, device=device)
+
+
+def extract_single(text: str) -> "np.ndarray":
+    """Return a [1, dim] activation vector for one text, reusing a cached model.
+
+    Same layer / pooling as the batch extractor, so scores are consistent with
+    the trained probe and SAE.
+    """
+    import torch
+    _ensure_model()
+    tok, model, device = _RT["tok"], _RT["model"], _RT["device"]
+    safe_text = text if (text and text.strip()) else "[empty]"
+    with torch.no_grad():
+        enc = tok(safe_text, return_tensors="pt", truncation=True,
+                  max_length=512).to(device)
+        out = model(**enc)
+        hs = out.hidden_states[LAYER_INDEX][0]
+        am = enc["attention_mask"][0]
+        vec = _pool(hs, am, POOLING)
+    return np.asarray(vec, dtype=np.float64)[None, :]
 
 
 def main():

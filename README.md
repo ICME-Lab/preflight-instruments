@@ -1,11 +1,27 @@
-# injection-probe
+# preflight-instruments
 
-Made with ❤️ by [ICME Labs](https://blog.icme.io/).
+Made with ❤️ by [ICME Labs](https://blog.icme.io/) · part of **Preflight** · docs at [docs.icme.io](https://docs.icme.io/)
 
-<img width="983" height="394" alt="icme_labs" src="https://github.com/user-attachments/assets/ffc334ed-c301-4ce6-8ca3-a565328904fe" />
+<img width="983" alt="ICME Labs" src="https://github.com/user-attachments/assets/ffc334ed-c301-4ce6-8ca3-a565328904fe" />
 
-A minimal, honest reference implementation of an **activation probe** for
-detecting prompt-injection *compliance* in an open-weights LLM (Qwen by default).
+Instruments for **detecting prompt injection and proving the detector ran**. A
+suite of complementary detectors behind one interface, benchmarked honestly, plus
+a zero-knowledge proof (via [JOLT Atlas](https://github.com/ICME-Lab/jolt-atlas))
+that the check actually executed — so anyone downstream can verify it, without
+trusting the party that ran it.
+
+**Detectors in the suite:**
+- **probe** — a linear activation probe: reads a frozen LLM's hidden state and
+  scores injection-compliance along one learned direction. Cheap, and the piece
+  with a working ZK proof today.
+- **promptguard** — Meta Llama Prompt Guard 2 (86M, multilingual): reads the raw
+  text. An independent signal from the probe (sees the string, not the
+  activation), so it fails differently and covers different attacks.
+- **sae** — a sparse autoencoder trained on the LLM's activations, with a probe on
+  its features. Competitive on detection; its bigger role is interpretability and
+  (future) intervention.
+- **ensemble** — combines them. Because each detector misses different examples,
+  their union catches more than any single one — the "cover the most" story.
 
 The idea (recap of what a probe is): a transformer represents high-level
 properties as roughly linear directions in its residual stream. We collect
@@ -28,19 +44,34 @@ inference time as a cheap tripwire.
 
 ```
 src/
-  config.py        # model name, layer index, paths
-  extract.py       # load Qwen, run prompts, save mean-pooled hidden states
-  probe.py         # fit / save / load / score the logistic-regression probe
-  detect.py        # CLI: score an arbitrary string for injection-compliance
-  guardrail.py     # OPTIONAL: deterministic action check via ICME (fail-closed)
+  config.py         # model name, layer index, paths
+  extract.py        # load Qwen, run prompts, save mean-pooled activations + texts
+  probe.py          # fit / save / load / score the logistic-regression probe
+  detect.py         # CLI: score an arbitrary string for injection-compliance
+  evaluate.py       # honest probe metrics: cross-val, per-group, by-attack-type
+  train_sae.py      # train the sparse autoencoder on activations -> artifacts/sae.npz
+  evaluate_suite.py # benchmark ALL detectors + the ensemble on the same slices
+detectors/
+  base.py           # Detector interface (text vs activation modality) + ensemble result
+  probe_detector.py # the linear probe as a Detector
+  promptguard_detector.py  # Meta Llama Prompt Guard 2 (86M) text detector
+  sae.py            # sparse autoencoder (train / encode / decode / save-load)
+  sae_detector.py   # linear probe on SAE features
+  ensemble.py       # combine detector scores (max / mean / weighted)
 data/
-  dataset.py       # synthetic set + build_combined_dataset (synthetic + InjecAgent)
-  injecagent.py    # loads the real InjecAgent benchmark, builds injected/benign pairs
-  injecagent/      # cached benchmark .jsonl files (populated on first fetch)
-tests/
-  test_probe_synthetic.py   # runs WITHOUT a model, on synthetic activations
-  test_dataset.py           # sanity checks on the dataset builder
-artifacts/         # saved probe + metrics land here
+  dataset.py        # synthetic set + build_combined_dataset (synthetic + benchmarks)
+  injecagent.py     # loads the InjecAgent benchmark, builds injected/benign pairs
+  deepset.py        # loads deepset/prompt-injections (direct, multilingual)
+  injecagent/       # cached benchmark .jsonl files (populated on first fetch)
+zkp/
+  export_onnx_coreops.py  # export the probe as a JOLT-Atlas-compatible ONNX graph
+  probe_example.rs        # JOLT Atlas example: prove -> verify the probe
+  benchmark.py            # with/without-zk latency benchmark
+  README.md               # full clone-to-verified-proof walkthrough
+tests/               # all run WITHOUT a model, on synthetic activations
+  test_probe_synthetic.py test_dataset.py test_evaluate.py
+  test_detectors.py test_zkp_export.py ...
+artifacts/           # saved probe, metrics, sae.npz land here
 ```
 
 ## Training data
@@ -111,6 +142,39 @@ pytest tests/test_probe_synthetic.py -v
 This proves the training/eval/scoring path is correct on synthetic linearly-
 separable activations, so when you plug in real Qwen activations the only
 variable is representation quality, not plumbing.
+
+## The detector suite
+
+Run all detectors and the ensemble on the same eval slices:
+
+```bash
+# one-time: PromptGuard is a gated Llama model
+#   request access: https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M
+huggingface-cli login
+
+python -m src.extract                     # activations + source texts
+python -m src.probe                       # linear probe
+python -m src.train_sae --hidden 6144     # SAE on activations (4 x dim)
+python -m src.evaluate_suite              # probe + promptguard + sae + ensemble
+```
+
+`evaluate_suite` reports per-detector AUROC and a per-group recall/FPR grid so you
+can see *where* each detector's coverage comes from and whether the ensemble's
+union beats any single detector. Detectors that can't load (PromptGuard without
+access approval, missing SAE) are skipped with a note, so the suite always runs on
+what's available.
+
+**On honest SAE numbers.** By default `evaluate_suite` **retrains the SAE inside
+each cross-validation fold** on the training split only, so the SAE dictionary
+never sees eval examples. A single pre-trained `artifacts/sae.npz` (from
+`src.train_sae`) leaks eval data into dictionary learning and inflates the SAE's
+score; that fast-but-leaky path is available behind `--sae-pretrained` for quick
+iteration only — don't cite its numbers.
+
+**What the ensemble buys you.** On real data the ensemble beats individual
+detectors on several attack groups (each detector misses different examples), at
+the cost of a slightly higher benign false-positive rate (the max strategy adopts
+any detector's false alarm). Tune the threshold to pick your operating point.
 
 ## Evaluation harness
 
@@ -240,3 +304,16 @@ python -m src.detect "Can you retrieve my order history and email me a summary o
 
 To turn this battery into a permanent regression test, fold these strings into
 `tests/` with expected-direction assertions and rerun after every change.
+
+## Acknowledgments
+
+The zero-knowledge proofs are built on [JOLT Atlas](https://github.com/ICME-Lab/jolt-atlas),
+ICME Labs' zkML framework, which extends [JOLT](https://github.com/a16z/jolt) to
+verify ONNX model inference. The prompt-injection benchmarks use
+[InjecAgent](https://github.com/uiuc-kang-lab/InjecAgent) and
+[deepset/prompt-injections](https://huggingface.co/datasets/deepset/prompt-injections),
+each under their own license.
+
+---
+
+Made with ❤️ by [ICME Labs](https://blog.icme.io/) · [docs.icme.io](https://docs.icme.io/)
